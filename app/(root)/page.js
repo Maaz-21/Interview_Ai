@@ -2,9 +2,19 @@ import React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { dummyInterviews } from '@/constants';
 import InterviewCard from '@/components/InterviewCard';
-function HomePage() {
+import { getCurrentUser } from '@/lib/actions/auth.action';
+import {getInterviewsByUserId, getLatestInterviews } from '@/lib/actions/general.action';
+
+async function HomePage() {
+  const user = await getCurrentUser();
+  const [userInterviews, latestInterviews] = await Promise.all([
+    getInterviewsByUserId(user?.id),
+    getLatestInterviews({ userId: user?.id })
+  ]);
+  const hasPastInterviews = userInterviews?.length > 0;
+  const hasUpcomingInterviews = latestInterviews?.length > 0;
+
   return (
     <>
     <section className='card-cta'>
@@ -20,16 +30,25 @@ function HomePage() {
     <section className="flex flex-col gap-6 mt-8">
       <h2>Your Interviews</h2>
       <div className="interviews-section">
-        {dummyInterviews.map((interview) => (
-          <InterviewCard key={interview.id} interview={interview} />
-        ))}
-        {dummyInterviews.length === 0 && <p> You haven't taken any interviews yet.</p>}
+        { hasPastInterviews ? (
+          userInterviews.map((interview) => (
+            <InterviewCard key={interview.id} interview={interview} />
+          ))
+        ) :  (
+          <p> You haven't taken any interviews yet.</p>
+        )}
       </div>
     </section>
     <section className='flex flex-col gap-6 mt-8'>
-      <h2>Take an Interview</h2>
+      <h2>Top Scoring Interviews</h2>
       <div className='interviews-section'> 
-        <p> There are no interviews available</p>
+        { hasUpcomingInterviews ? (
+          latestInterviews.map((interview) => (
+            <InterviewCard key={interview.id} interview={interview} />
+          ))
+        ) :  (
+          <p> There are no upcoming interviews available.</p>
+        )}
       </div>
     </section>
     </>

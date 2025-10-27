@@ -4,53 +4,86 @@ import { db } from "@/firebase/admin";
 import { getRandomInterviewCover } from "@/lib/utils";
 
 export async function GET(){
-   return Response.json({success: true, data: "Thank you!"}, {status: 200}); 
+   return Response.json({success: true, data: "Interview Question Generator API"}, {status: 200}); 
 }
 
 export async function POST(req){
-    const {type, role, level, techstack, amount, userid } = await req.json();
-    try{
-        console.log("POST request received with data:", {type, role, level, techstack, amount, userid});
-        
-        const { text: questions } = await generateText({
-              model: google("gemini-2.0-flash-001", {
-                apiKey: process.env.GOOGLE_GEMINI_API_KEY,
-              }),
-              prompt: `Prepare questions for a job interview.
-                The job role is ${role}.
-                The job experience level is ${level}.
-                The tech stack used in the job is: ${techstack}.
-                The focus between behavioural and technical questions should lean towards: ${type}.
-                The amount of questions required is: ${amount}.
-                Please return only the questions, without any additional text.
-                The questions are going to be read by a voice assistant so do not use "/" or "*" or any other special characters which might break the voice assistant.
-                Return the questions formatted like this:
-                ["Question 1", "Question 2", "Question 3"]
-                
-                Thank you! <3
-            `,
-            });
-        
-            console.log("Generated questions:", questions);
-        
-            const interview = {
-              role: role,
-              type: type,
-              level: level,
-              techstack: techstack.split(","),
-              questions: JSON.parse(questions),
-              userId: userid,
-              finalized: true,
-              coverImage: getRandomInterviewCover(),
-              createdAt: new Date().toISOString(),
-            };
-        
-            await db.collection("interviews").add(interview);
-        
-            return Response.json({ success: true }, { status: 200 });
+    try {
+        const body = await req.json();
+        console.log("🎯 API ROUTE - Raw request body:", JSON.stringify(body, null, 2));
+            // Handle direct API call format
+        let extractedData = body;
+        console.log("📦 Direct API call - extracted data:", extractedData);
+        const {type, role, level, techstack, amount, userid } = extractedData;
 
-    }catch(e){
-        console.log(e);
-        return Response.json({success: false, message: error}, {status: 500});
+        // Validate required fields
+        if (!type || !role || !level || !techstack || !amount) {
+            const errorMsg = `You must provide: ${!type ? 'type ' : ''}${!role ? 'role ' : ''}${!level ? 'level ' : ''}${!techstack ? 'techstack ' : ''}${!amount ? 'amount' : ''}`;
+           return Response.json({
+                    success: false,
+                    message: `Missing required fields, ${errorMsg}`
+      });
+        }
+        // Generate questions using Gemini AI
+        const { text } = await generateText({
+            model: google("gemini-2.0-flash-001", {
+                apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+            }),
+            prompt: `Generate interview questions for a job interview.
+                Role: ${role}
+                Experience Level: ${level}
+                Interview Type: ${type} (focus more on this type)
+                Tech Stack: ${techstack}
+                Number of Questions: ${amount}
+                
+                Instructions:
+                - Return ONLY the questions in a JSON array format
+                - No additional text or formatting
+                - Questions should be clear and suitable for voice conversation
+                - Avoid special characters that might break voice synthesis
+                - Mix of practical and conceptual questions
+                - Appropriate difficulty for ${level} level
+                
+                Format: ["Question 1", "Question 2", "Question 3"]
+            `,
+        });
+
+        // Clean the response - remove markdown code blocks if present
+        let cleaned = text.trim().replace(/^```json\s*/i, "")
+                                 .replace(/^```\s*/i, "")
+                                 .replace(/\s*```$/i, "");
+
+        const questions = JSON.parse(cleaned);
+        console.log("✅ Generated Questions:", questions);
+        // Save to database (only if not a VAPI tool call or if userid is provided)
+        let interviewRef = null;
+        if (userid) {
+            const interview = {
+                role: role,
+                type: type,
+                level: level,
+                techstack: techstack.split(","),
+                questions: questions,
+                userId: userid || "voice-generated",
+                finalized: true,
+                coverImage: getRandomInterviewCover(),
+                createdAt: new Date().toISOString(),
+            };
+            interviewRef = await db.collection("interviews").add(interview);
+            console.log("💾 Saved interview to database with ID:", interviewRef.id);
+        }
+        // Return appropriate response format and InterviewId
+        return Response.json({
+                success: true,
+                interviewId: interviewRef.id,
+                questions,
+                result: `Generated ${questions.length} ${type.toLowerCase()} questions for ${role}.`,
+            });
+    } catch(e){
+        console.error("❌ Error:", e);
+        return Response.json({
+                success: false,
+                message: e.message || "Failed to generate questions",
+            }, { status: 500 });
     }
 }

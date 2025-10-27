@@ -66,8 +66,28 @@ async function onSubmit(values) {
             router.push('/');
        }
     }catch(error){
-       console.log(error);
-       toast.error(`There was an error: ${error}`)
+        console.log(error);
+        if(error?.code){
+            switch (error.code) {
+                case "auth/invalid-email":
+                    toast.error("Invalid email format. Please check your email.");
+                    break;
+                case "auth/user-not-found":
+                    toast.error("No user found with this email.");
+                    break;
+                case "auth/invalid-credential":
+                    toast.error("Incorrect password. Please try again.");
+                    break;
+                case "auth/too-many-requests":
+                    toast.error("Too many failed attempts. Try again later.");
+                    break;
+                default:
+                    toast.error("Authentication failed. Please try again.");
+                    break;
+            }
+        }else{
+            toast.error(`There was an error: ${error.message || error}`);
+        }
     }
   }
   const isSignIn = type === 'sign-in';

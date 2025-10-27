@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import dayjs from "dayjs";
 import { getRandomInterviewCover } from "@/lib/utils";
 import DisplayTechIcons from "./DisplayTechIcons";
+import { getFeedbackByInterviewId } from "@/lib/actions/general.action";
 // Helper function to get badge color based on type
 const getBadgeColor = (type) => {
   const colors = {
@@ -16,20 +17,21 @@ const getBadgeColor = (type) => {
   return colors[type] || "bg-gray-500";
 };
 
-function InterviewCard({ interview }) {
+async function InterviewCard({ interview }) {
   // Destructure interview properties
   const {
-    id: interviewId,
+    id,
+    userId,
     role,
     type,
     techstack = [],
-    createdAt,
-    feedback
+    createdAt
   } = interview;
 
   // Get normalized values
   const normalizedType = type || "General";
   const badgeColor = getBadgeColor(normalizedType);
+  const feedback = userId && id ? await getFeedbackByInterviewId({ interviewId: id, userId }) : null;
   const formattedDate = dayjs(feedback?.createdAt || createdAt || Date.now()).format('MMM D, YYYY');
 
   return (
@@ -67,12 +69,13 @@ function InterviewCard({ interview }) {
                 width={22}
                 height={22}
                 alt="calendar"
+                style={{ width: 'auto', height: 'auto' }}
               />
               <p>{formattedDate}</p>
             </div>
 
             <div className="flex flex-row gap-2 items-center">
-              <Image src="/star.svg" width={22} height={22} alt="star" />
+              <Image src="/star.svg" width={22} height={22} alt="star" style={{ width: 'auto', height: 'auto' }} />
               <p>{feedback?.totalScore || "---"}/100</p>
             </div>
           </div>
@@ -91,8 +94,8 @@ function InterviewCard({ interview }) {
             <Link
               href={
                 feedback
-                  ? `/interview/${interviewId}/feedback`
-                  : `/interview/${interviewId}`
+                  ? `/interview/${id}/feedback`
+                  : `/interview/${id}`
               }
             >
               {feedback ? "Check Feedback" : "View Interview"}

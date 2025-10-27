@@ -97,38 +97,7 @@ export const mappings = {
 };
 
 // VAPI assistant configuration for complete interview workflow
-export const createInterviewAssistant = (userId, preloadedQuestions = null) => {
-  const baseSystem = `You are an interviewer assistant. 
-  Your only job is to conduct an interview by asking a provided list of questions one-by-one.
-  Start by greeting the user and asking if they are ready to begin.
-  On confirmation, proceed to ask the questions one-by-one. like a real interviewer.
-Behavior rules:
-- Use the provided questions exactly in order. One by One ask them to the user.
-- Ask the first question directly, then wait for the user's complete answer.
-- After each answer give a brief (1-2 sentence) encouraging acknowledgement (according to the user's response), then ask the next question.
-- After all questions are complete, thank the user and end the interview.
-
-Error handling:
-- If no questions were provided, ask a short clarifying question such as: "I don't have any questions yet — would you like me to generate them?" and then wait.
-`;
-
-  // Build the messages array. Include the base system message first.
-  const messages = [
-    {
-      role: "system",
-      content: baseSystem,
-    },
-  ];
-
-  // If preloaded questions are provided, add an explicit system instruction to use them.
-  if (preloadedQuestions && preloadedQuestions.length) {
-    // Provide the actual question list to the assistant but instruct it to NOT reveal the list to the user.
-    messages.push({
-      role: "system",
-      content: `QUESTIONS_DATA: ${JSON.stringify(preloadedQuestions)}\n\nINSTRUCTION: You have been provided with ${preloadedQuestions.length} questions. Use these questions exactly and in order. After receiving confirmation from the user, ask the first question directly and proceed one-by-one, waiting for full answers and giving a brief encouraging acknowledgement after each.`,
-    });
-  }
-
+export const createInterviewAssistant = (userId) => {
   return {
     name: "AI Interview Assistant",
     firstMessage: "Hi! I'm your AI interview assistant. I'll help you practice for your upcoming interview. Are you ready to get started?",
@@ -136,16 +105,146 @@ Error handling:
       provider: "openai",
       model: "gpt-4o",
       temperature: 0.7,
-      messages,
+      messages: [
+        {
+          role: "system",
+          content: `You are a professional AI interview assistant. Follow this exact workflow:
+
+PHASE 1 - INTRODUCTION & READINESS:
+1. Greet the user and ask if they're ready to start their interview preparation
+2. Wait for confirmation
+
+PHASE 2 - COLLECT INTERVIEW PARAMETERS:
+Once user confirms readiness, collect these 5 details in natural conversation:
+- Role: What position are they interviewing for? (e.g., Frontend Developer, Backend Developer, Fullstack Developer, UI/UX Designer, Product Manager)
+- Type: Technical or Behavioral interview focus?
+- Level: What's their experience level? (Junior, Mid-level, Senior)
+- Tech Stack: What technologies should we focus on? (e.g., React, Node.js, Python, etc.)
+- Amount: How many questions do they want? (suggest 3-5 for practice)
+
+PHASE 3 - GENERATE QUESTIONS:
+Once you have all 5 details, use the generateQuestions tool to create personalized interview questions.
+
+PHASE 4 - CONDUCT INTERVIEW:
+After receiving the generated questions, conduct the interview:
+- Ask questions one at a time
+- Wait for complete answers
+- Give brief acknowledgment between questions
+- Maintain professional but friendly tone
+
+PHASE 5 - CONCLUSION:
+After all questions, thank them and end the interview.
+
+IMPORTANT GUIDELINES:
+- Keep responses under 30 words for natural voice conversation
+- Be conversational and encouraging
+- Ask for one detail at a time, don't rush
+- Confirm you have all details before generating questions`
+        }
+      ],
+      tools: [
+        {
+          type: "apiRequest",
+          function: {
+            name: "api_request_tool"
+          },
+          name: "generateQuestions",
+          url: `${process.env.NEXT_PUBLIC_APP_URL}/api/vapi/generate`,
+          method: "POST",
+          headers: {
+            type: "object",
+            properties: {
+              "Content-Type": {
+                type: "string",
+                value: "application/json"
+              }
+            }
+          },
+          body: {
+            type: "object",
+            properties: {
+              role: {
+                description: "Job role/position they're interviewing for",
+                type: "string"
+              },
+              type: {
+                description: "Interview type - Technical or Behavioral",
+                type: "string"
+              },
+              level: {
+                description: "Experience level - Junior, Mid, or Senior",
+                type: "string"
+              },
+              techstack: {
+                description: "Technologies to focus on (comma-separated)",
+                type: "string"
+              },
+              amount: {
+                description: "Number of questions to generate",
+                type: "string"
+              },
+              userid: {
+                description: "User ID for saving the interview",
+                type: "string",
+                value: userId || "voice-user"
+              }
+            },
+            required: [
+              "role",
+              "type", 
+              "level",
+              "techstack",
+              "amount"
+            ]
+          }
+        }
+      ]
     },
     voice: {
       provider: "11labs",
-      voiceId: "21m00Tcm4TlvDq8ikWAM",
+      voiceId: "21m00Tcm4TlvDq8ikWAM"
     },
-    endCallMessage: "Thank you for practicing with me today. Good luck with your interview! Have a great day!",
+    endCallMessage: "Thank you for practicing with me today. Good luck with your interview! Have a great day!"
   };
 };
 
+// Simple test assistant for debugging
+export const createMinimalTestAssistant = () => {
+  return {
+    name: "Test Interview Assistant",
+    firstMessage: "Hi! This is a test interview. I'll ask you 3 quick questions. Are you ready?",
+    model: {
+      provider: "openai",
+      model: "gpt-4o",
+      temperature: 0.7,
+      messages: [
+        {
+          role: "system",
+          content: `You are conducting a simple 3-question interview test.
+
+QUESTIONS TO ASK:
+1. Tell me about yourself and your background
+2. What's your biggest strength as a developer?
+3. Where do you see yourself in 5 years?
+
+PROCESS:
+- Ask if they're ready first
+- Ask questions one at a time
+- Wait for complete answers
+- Give brief acknowledgment between questions
+- After all 3 questions, thank them and end the call
+
+Keep responses under 25 words. Be natural and conversational.`
+        }
+      ]
+    },
+    voice: {
+      provider: "11labs",
+      voiceId: "21m00Tcm4TlvDq8ikWAM"
+    },
+    endCallMessage: "Great! That completes our test interview. Thanks for trying it out!"
+  };
+};
 
 export const feedbackSchema = z.object({
   totalScore: z.number(),
