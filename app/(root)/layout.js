@@ -11,7 +11,7 @@ export default async function Layout({ children }) {
             <nav>
                 <Link href="/" className="flex items-center gap-2">
                     <Image src="/logo.svg" alt="MockMate Logo" width={38} height={32} style={{ width: "auto", height: "auto" }} />
-                    <h2 className="text-primary-100">PrepWise</h2>
+                    <h2 className="text-primary-100">MockMate</h2>
                 </Link>
             </nav>
 

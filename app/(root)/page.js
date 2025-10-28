@@ -4,16 +4,16 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import InterviewCard from '@/components/InterviewCard';
 import { getCurrentUser } from '@/lib/actions/auth.action';
-import {getInterviewsByUserId, getLatestInterviews } from '@/lib/actions/general.action';
+import { getInterviewsByUserId, getLatestInterviews, getTopScoringInterviews } from '@/lib/actions/general.action';
 
 async function HomePage() {
   const user = await getCurrentUser();
-  const [userInterviews, latestInterviews] = await Promise.all([
+  const [userInterviews, topInterviews] = await Promise.all([
     getInterviewsByUserId(user?.id),
-    getLatestInterviews({ userId: user?.id })
+    getTopScoringInterviews({ limit: 6 })
   ]);
   const hasPastInterviews = userInterviews?.length > 0;
-  const hasUpcomingInterviews = latestInterviews?.length > 0;
+  const hasTopInterviews = topInterviews?.length > 0;
 
   return (
     <>
@@ -42,12 +42,13 @@ async function HomePage() {
     <section className='flex flex-col gap-6 mt-8'>
       <h2>Top Scoring Interviews</h2>
       <div className='interviews-section'> 
-        { hasUpcomingInterviews ? (
-          latestInterviews.map((interview) => (
-            <InterviewCard key={interview.id} interview={interview} />
+        { hasTopInterviews ? (
+          topInterviews.map((t) => (
+            // `t.interview` may be null if the interview doc was removed — fall back to a minimal shape
+            <InterviewCard key={t.interviewId} interview={t.interview || { id: t.interviewId, role: 'Unknown', coverImage: '/pattern.png', createdAt: t.createdAt }} />
           ))
         ) :  (
-          <p> There are no upcoming interviews available.</p>
+          <p> There are no top scoring interviews available.</p>
         )}
       </div>
     </section>

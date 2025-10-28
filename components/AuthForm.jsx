@@ -96,7 +96,7 @@ async function onSubmit(values) {
             <div className="flex flex-col gap-6 card py-14 px-10">
                 <div className="flex flex-row gap-2 justify-center">
                     <Image src="/logo.svg" alt="Logo" height={32} width={32} style={{ width: "auto", height: "auto" }}/>
-                    <h2 className="text-primary-100">Prepwise</h2>
+                    <h2 className="text-primary-100">MockMate</h2>
                 </div>
                 <h3 className="text-center">Practice job interviews with AI</h3>
             
