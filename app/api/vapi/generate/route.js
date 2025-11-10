@@ -10,10 +10,10 @@ export async function GET(){
 export async function POST(req){
     try {
         const body = await req.json();
-        console.log("🎯 API ROUTE - Raw request body:", JSON.stringify(body, null, 2));
+        console.log(" API ROUTE - Raw request body:", JSON.stringify(body, null, 2));
             // Handle direct API call format
         let extractedData = body;
-        console.log("📦 Direct API call - extracted data:", extractedData);
+        console.log(" Direct API call - extracted data:", extractedData);
         const {type, role, level, techstack, amount, userid } = extractedData;
 
         // Validate required fields
@@ -54,7 +54,7 @@ export async function POST(req){
                                  .replace(/\s*```$/i, "");
 
         const questions = JSON.parse(cleaned);
-        console.log("✅ Generated Questions:", questions);
+        console.log(" Generated Questions:", questions);
         // Save to database (only if not a VAPI tool call or if userid is provided)
         let interviewRef = null;
         if (userid) {
@@ -70,7 +70,7 @@ export async function POST(req){
                 createdAt: new Date().toISOString(),
             };
             interviewRef = await db.collection("interviews").add(interview);
-            console.log("💾 Saved interview to database with ID:", interviewRef.id);
+            console.log(" Saved interview to database with ID:", interviewRef.id);
         }
         // Return appropriate response format and InterviewId
         return Response.json({
@@ -80,7 +80,7 @@ export async function POST(req){
                 result: `Generated ${questions.length} ${type.toLowerCase()} questions for ${role}.`,
             });
     } catch(e){
-        console.error("❌ Error:", e);
+        console.error(" Error:", e);
         return Response.json({
                 success: false,
                 message: e.message || "Failed to generate questions",

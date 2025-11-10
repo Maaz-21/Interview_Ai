@@ -7,7 +7,6 @@ import { useForm } from "react-hook-form"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import {Form} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 import FormField from "./FormField"
 import { useRouter } from "next/navigation"
@@ -95,7 +94,7 @@ async function onSubmit(values) {
         <div className="card-border lg:min-w-[566px]">
             <div className="flex flex-col gap-6 card py-14 px-10">
                 <div className="flex flex-row gap-2 justify-center">
-                    <Image src="/logo.svg" alt="Logo" height={32} width={32} style={{ width: "auto", height: "auto" }}/>
+                    <Image src="/logo2.png" alt="Logo" height={32} width={32} style={{ width: "auto", height: "auto" }}/>
                     <h2 className="text-primary-100">MockMate</h2>
                 </div>
                 <h3 className="text-center">Practice job interviews with AI</h3>
