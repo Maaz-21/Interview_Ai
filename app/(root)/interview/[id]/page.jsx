@@ -5,7 +5,6 @@ import DisplayTechIcons from '@/components/DisplayTechIcons';
 import Agent from '@/components/Agent';
 import { getInterviewById, getFeedbackByInterviewId } from '@/lib/actions/general.action';
 import { getCurrentUser } from '@/lib/actions/auth.action';
-import { getRandomInterviewCover } from '@/lib/utils';
 
 const Page = async({params})=>{
     const user = await getCurrentUser();
@@ -23,7 +22,7 @@ const Page = async({params})=>{
                 <div className="flex flex-row gap-4 items-center max-sm:flex-col">
                   <div className="flex flex-row gap-4 items-center">
                     <Image
-                      src={getRandomInterviewCover()}
+                      src={interview.coverImage || "/covers/adobe.png"}
                       alt="cover-image"
                       width={40}
                       height={40}

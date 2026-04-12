@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import InterviewCard from '@/components/InterviewCard';
 import { getCurrentUser } from '@/lib/actions/auth.action';
-import { getInterviewsByUserId, getLatestInterviews, getTopScoringInterviews } from '@/lib/actions/general.action';
+import { getInterviewsByUserId, getTopScoringInterviews } from '@/lib/actions/general.action';
 
 async function HomePage() {
   const user = await getCurrentUser();
@@ -35,7 +35,7 @@ async function HomePage() {
             <InterviewCard key={interview.id} interview={interview} />
           ))
         ) :  (
-          <p> You haven't taken any interviews yet.</p>
+          <p> You haven&apos;t taken any interviews yet.</p>
         )}
       </div>
     </section>
@@ -45,7 +45,12 @@ async function HomePage() {
         { hasTopInterviews ? (
           topInterviews.map((t) => (
             // `t.interview` may be null if the interview doc was removed — fall back to a minimal shape
-            <InterviewCard key={t.interviewId} interview={t.interview || { id: t.interviewId, role: 'Unknown', coverImage: '/pattern.png', createdAt: t.createdAt }} />
+            <InterviewCard
+              key={t.interviewId}
+              interview={t.interview || { id: t.interviewId, role: 'Unknown', coverImage: '/covers/adobe.png', createdAt: t.createdAt }}
+              score={t.totalScore}
+              disableFeedbackLookup
+            />
           ))
         ) :  (
           <p> There are no top scoring interviews available.</p>

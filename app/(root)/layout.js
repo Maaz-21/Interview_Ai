@@ -15,12 +15,10 @@ export default async function Layout({ children }) {
                     <Image src="/logo2.png" alt="MockMate Logo" width={38} height={32} style={{ width: "auto", height: "auto" }} />
                     <h2 className="text-primary-100">MockMate</h2>
                 </Link>
-
                 <div>
                     <LogoutButton>Exit</LogoutButton>
                 </div>
             </nav>
-
             {children}
         </div>
     );

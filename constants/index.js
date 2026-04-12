@@ -96,57 +96,6 @@ export const mappings = {
   "aws amplify": "amplify",
 };
 
-// VAPI assistant configuration for complete interview workflow
-export const createInterviewAssistant = (userId, preloadedQuestions = null) => {
-  const baseSystem = `You are an interviewer assistant. 
-  Your only job is to conduct an interview by asking a provided list of questions one-by-one.
-  Start by greeting the user and asking if they are ready to begin.
-  On confirmation, proceed to ask the questions one-by-one. like a real interviewer.
-Behavior rules:
-- Use the provided questions exactly in order. One by One ask them to the user.
-- Ask the first question directly, then wait for the user's complete answer.
-- After each answer give a brief (1-2 sentence) encouraging acknowledgement (according to the user's response), then ask the next question.
-- After all questions are complete, thank the user and end the interview.
-
-Error handling:
-- If no questions were provided, ask a short clarifying question such as: "I don't have any questions yet — would you like me to generate them?" and then wait.
-`;
-
-  // Build the messages array. Include the base system message first.
-  const messages = [
-    {
-      role: "system",
-      content: baseSystem,
-    },
-  ];
-
-  // If preloaded questions are provided, add an explicit system instruction to use them.
-  if (preloadedQuestions && preloadedQuestions.length) {
-    // Provide the actual question list to the assistant but instruct it to NOT reveal the list to the user.
-    messages.push({
-      role: "system",
-      content: `QUESTIONS_DATA: ${JSON.stringify(preloadedQuestions)}\n\nINSTRUCTION: You have been provided with ${preloadedQuestions.length} questions. Use these questions exactly and in order. After receiving confirmation from the user, ask the first question directly and proceed one-by-one, waiting for full answers and giving a brief encouraging acknowledgement after each.`,
-    });
-  }
-
-  return {
-    name: "AI Interview Assistant",
-    firstMessage: "Hi! I'm your AI interview assistant. I'll help you practice for your upcoming interview. Are you ready to get started?",
-    model: {
-      provider: "openai",
-      model: "gpt-4o",
-      temperature: 0.7,
-      messages,
-    },
-    voice: {
-      provider: "11labs",
-      voiceId: "21m00Tcm4TlvDq8ikWAM",
-    },
-    endCallMessage: "Thank you for practicing with me today. Good luck with your interview! Have a great day!",
-  };
-};
-
-
 export const feedbackSchema = z.object({
   totalScore: z.number(),
   categoryScores: z.tuple([

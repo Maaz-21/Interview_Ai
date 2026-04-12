@@ -31,6 +31,11 @@ function AuthForm({type}) {
       password: "",
     },
   })
+    const isSubmitting = form.formState.isSubmitting;
+    const isSignIn = type === 'sign-in';
+    const submitButtonText = isSignIn
+        ? (isSubmitting ? "Signing in..." : "Sign In")
+        : (isSubmitting ? "Creating account..." : "Create an Account");
  
   // 2. Define a submit handler.
 async function onSubmit(values) {
@@ -58,14 +63,18 @@ async function onSubmit(values) {
                 toast.error("SignIn Failed");
                 return;
             }
-            await signIn({
+            const result = await signIn({
                 email, idToken
-            })
+            });
+            if(!result?.success){
+                toast.error(result?.message || "Sign in failed.");
+                return;
+            }
             toast.success("Logged in successfully!");
             router.push('/');
        }
     }catch(error){
-        console.log(error);
+        console.error(error);
         if(error?.code){
             switch (error.code) {
                 case "auth/invalid-email":
@@ -89,7 +98,7 @@ async function onSubmit(values) {
         }
     }
   }
-  const isSignIn = type === 'sign-in';
+
     return (
         <div className="card-border lg:min-w-[566px]">
             <div className="flex flex-col gap-6 card py-14 px-10">
@@ -104,7 +113,7 @@ async function onSubmit(values) {
                         {!isSignIn && <FormField control={form.control} name="name" label="Name" placeholder="John Doe" />}
                         <FormField control={form.control} name="email" label="Email" placeholder="you@example.com" type="email" />
                         <FormField control={form.control} name="password" label="Password" placeholder="••••••••" type="password" />
-                        <Button className="btn" type="submit">{isSignIn ? "Sign In" : "Create an Account"}</Button>
+                        <Button className="btn" type="submit" disabled={isSubmitting}>{submitButtonText}</Button>
                     </form>
                 </Form>
                 <p className="text-center">

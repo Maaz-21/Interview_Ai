@@ -71,12 +71,6 @@
  */
 
 /**
- * @typedef {Object} GetLatestInterviewsParams
- * @property {string} userId
- * @property {number} [limit]
- */
-
-/**
  * @typedef {Object} SignInParams
  * @property {string} email
  * @property {string} idToken

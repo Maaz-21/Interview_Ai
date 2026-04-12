@@ -9,6 +9,7 @@ import {
 } from "@/lib/actions/general.action";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/actions/auth.action";
+import InterviewPrivacyToggle from "@/components/InterviewPrivacyToggle";
 
 const Feedback = async ({ params }) => {
   const { id } = await params;
@@ -58,6 +59,12 @@ const Feedback = async ({ params }) => {
       </div>
 
       <hr />
+
+      <InterviewPrivacyToggle
+        interviewId={id}
+        initialIsPublic={Boolean(interview?.isPublic)}
+        initialIsAnonymous={interview?.isAnonymous !== false}
+      />
 
       <p>{feedback?.finalAssessment}</p>
 
