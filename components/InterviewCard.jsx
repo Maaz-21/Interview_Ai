@@ -86,7 +86,7 @@ async function InterviewCard({ interview, score = null, disableFeedbackLookup = 
 
             <div className="flex flex-row gap-2 items-center">
               <Image src="/star.svg" width={22} height={22} alt="star" style={{ width: 'auto', height: 'auto' }} />
-              <p>{scoreValue ?? "---"}/100</p>
+              <p>{scoreValue ?? "---"}/50</p>
             </div>
           </div>
 

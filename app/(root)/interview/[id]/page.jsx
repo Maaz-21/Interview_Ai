@@ -46,6 +46,14 @@ const Page = async({params})=>{
                 type="interview"
                 questions={interview.questions}
                 feedbackId={feedback?.id}
+                initialExperienceMode={interview.experienceMode}
+                interviewMetadata={{
+                  role: interview.role,
+                  type: interview.type,
+                  level: interview.level,
+                  techstack: interview.techstack,
+                  amount: interview.questionCount || interview.questions?.length || 5,
+                }}
               />
             </>
     );

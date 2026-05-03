@@ -25,6 +25,24 @@ const InterviewStage = {
   FINISHED: "FINISHED",
 };
 
+const InterviewMode = {
+  GUIDED: "guided-voice",
+  LIVE_MODEL: "live-model",
+};
+
+const INTERVIEW_MODE_OPTIONS = [
+  {
+    id: InterviewMode.GUIDED,
+    title: "Mode 1: Guided Voice Interview",
+    description: "Stable flow with pre-generated questions and Gemini-powered acknowledgements.",
+  },
+  {
+    id: InterviewMode.LIVE_MODEL,
+    title: "Mode 2: Gemini Live Realtime Interview",
+    description: "Runs a true Gemini Live websocket interviewer with dynamic turn-by-turn questions.",
+  },
+];
+
 const FALLBACK_ACKS = [
   "Good answer. Let's continue.",
   "Nice thinking. Moving to the next one.",
@@ -32,9 +50,85 @@ const FALLBACK_ACKS = [
   "Great effort. Next question coming up.",
 ];
 
+const getPcmSampleRate = (mimeType) => {
+  const match = String(mimeType || "").match(/rate=(\d+)/i);
+  return match ? Number(match[1]) : 24000;
+};
+
+const base64ToBytes = (base64) => {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+};
+
+const createWavUrlFromPcm = ({ data, mimeType }) => {
+  const pcmBytes = base64ToBytes(data);
+  const sampleRate = getPcmSampleRate(mimeType);
+  const channels = 1;
+  const bitsPerSample = 16;
+  const headerSize = 44;
+  const buffer = new ArrayBuffer(headerSize + pcmBytes.length);
+  const view = new DataView(buffer);
+  const output = new Uint8Array(buffer);
+
+  const writeString = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes.length, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * (bitsPerSample / 8), true);
+  view.setUint16(32, channels * (bitsPerSample / 8), true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, "data");
+  view.setUint32(40, pcmBytes.length, true);
+  output.set(pcmBytes, headerSize);
+
+  return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+};
+
 const getSpeechRecognitionCtor = () => {
   if (typeof window === "undefined") return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+};
+
+const parseApiResponse = async (response) => {
+  const raw = await response.text();
+
+  if (!raw) {
+    return {
+      data: {},
+      message: response.ok ? "" : `Request failed (${response.status})`,
+    };
+  }
+
+  try {
+    const data = JSON.parse(raw);
+    const message = String(data?.message || data?.error?.message || "").trim();
+
+    return {
+      data,
+      message: message || (response.ok ? "" : `Request failed (${response.status})`),
+    };
+  } catch {
+    return {
+      data: {},
+      message: raw.trim() || (response.ok ? "" : `Request failed (${response.status})`),
+    };
+  }
 };
 
 function Agent({
@@ -44,8 +138,11 @@ function Agent({
   feedbackId,
   type,
   questions,
+  initialExperienceMode,
+  interviewMetadata,
 }) {
   const router = useRouter();
+
   const [callStatus, setCallStatus] = useState(CallStatus.INACTIVE);
   const [stage, setStage] = useState(InterviewStage.IDLE);
   const [messages, setMessages] = useState([]);
@@ -53,25 +150,65 @@ function Agent({
   const [lastMessage, setLastMessage] = useState("");
   const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
   const [createdInterviewId, setCreatedInterviewId] = useState(interviewId || null);
+
   const [sessionQuestions, setSessionQuestions] = useState([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [manualAnswer, setManualAnswer] = useState("");
   const [supportsSpeechRecognition, setSupportsSpeechRecognition] = useState(false);
   const [isRecognitionActive, setIsRecognitionActive] = useState(false);
-  // Pre-call form state
+
+  const [liveSessionId, setLiveSessionId] = useState(null);
+  const [liveExpectedQuestions, setLiveExpectedQuestions] = useState(0);
+  const [liveCurrentPrompt, setLiveCurrentPrompt] = useState("");
+  const [liveModelUsed, setLiveModelUsed] = useState("");
+  const [liveVoiceStatus, setLiveVoiceStatus] = useState("");
+
   const [roleInput, setRoleInput] = useState("");
   const [typeInput, setTypeInput] = useState("Technical");
   const [levelInput, setLevelInput] = useState("Junior");
   const [techstackInput, setTechstackInput] = useState("");
   const [amountInput, setAmountInput] = useState("5");
+  const [experienceMode, setExperienceMode] = useState(InterviewMode.GUIDED);
   const [isPreparingInterview, setIsPreparingInterview] = useState(false);
 
   const recognitionRef = useRef(null);
+  const liveAudioRef = useRef(null);
+  const liveAudioUrlRef = useRef(null);
   const finalTranscriptRef = useRef("");
   const hasGeneratedFeedbackRef = useRef(false);
   const stopRequestedRef = useRef(false);
+
   const isGenerateMode = type === "generate";
+  const persistedInterviewMode =
+    initialExperienceMode === InterviewMode.LIVE_MODEL
+      ? InterviewMode.LIVE_MODEL
+      : InterviewMode.GUIDED;
+  const activeMode = isGenerateMode ? experienceMode : persistedInterviewMode;
+  const isLiveMode = activeMode === InterviewMode.LIVE_MODEL;
+
+  const stopLiveAudioPlayback = useCallback((updateSpeaking = true) => {
+    if (liveAudioRef.current) {
+      try {
+        liveAudioRef.current.pause();
+        liveAudioRef.current.currentTime = 0;
+      } catch {
+        // no-op
+      }
+
+      liveAudioRef.current = null;
+    }
+
+    if (liveAudioUrlRef.current) {
+      URL.revokeObjectURL(liveAudioUrlRef.current);
+      liveAudioUrlRef.current = null;
+    }
+
+    if (updateSpeaking) {
+      setIsSpeaking(false);
+    }
+  }, []);
 
   useEffect(() => {
     setSupportsSpeechRecognition(Boolean(getSpeechRecognitionCtor()));
@@ -88,8 +225,22 @@ function Agent({
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+
+      stopLiveAudioPlayback(false);
     };
-  }, []);
+  }, [stopLiveAudioPlayback]);
+
+  useEffect(() => {
+    return () => {
+      if (!liveSessionId) return;
+
+      void fetch("/api/interview/live/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: liveSessionId }),
+      });
+    };
+  }, [liveSessionId]);
 
   const appendMessage = useCallback((role, content) => {
     const normalized = String(content || "").trim();
@@ -181,6 +332,7 @@ function Agent({
 
     return new Promise((resolve) => {
       try {
+        stopLiveAudioPlayback(false);
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.rate = 0.96;
@@ -203,7 +355,110 @@ function Agent({
         resolve();
       }
     });
-  }, []);
+  }, [stopLiveAudioPlayback]);
+
+  const playAssistantAudio = useCallback(
+    (audio, fallbackText) => {
+      const audioData = String(audio?.data || "").trim();
+      if (!audioData || typeof window === "undefined") {
+        return speakText(fallbackText);
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          stopLiveAudioPlayback(true);
+          resolve();
+        };
+
+        const fallbackToBrowserVoice = async () => {
+          if (settled) return;
+          settled = true;
+          stopLiveAudioPlayback(false);
+          setLiveVoiceStatus(
+            "Mode 2 websocket is active, but native audio playback failed. Browser voice fallback is in use."
+          );
+          await speakText(fallbackText);
+          resolve();
+        };
+
+        try {
+          const mimeType = String(audio?.mimeType || "audio/pcm;rate=24000");
+          const isRawPcm = mimeType.toLowerCase().includes("audio/pcm");
+          const audioUrl = isRawPcm
+            ? createWavUrlFromPcm({ data: audioData, mimeType })
+            : `data:${mimeType};base64,${audioData}`;
+
+          stopLiveAudioPlayback(false);
+          if (typeof window.speechSynthesis !== "undefined") {
+            window.speechSynthesis.cancel();
+          }
+
+          const player = new Audio(audioUrl);
+          liveAudioRef.current = player;
+          if (isRawPcm) {
+            liveAudioUrlRef.current = audioUrl;
+          }
+
+          player.onended = finish;
+          player.onerror = () => {
+            void fallbackToBrowserVoice();
+          };
+
+          setIsSpeaking(true);
+          const playResult = player.play();
+          if (playResult && typeof playResult.catch === "function") {
+            playResult.catch(() => {
+              void fallbackToBrowserVoice();
+            });
+          }
+        } catch (error) {
+          console.error("Failed to play Gemini Live audio:", error);
+          void fallbackToBrowserVoice();
+        }
+      });
+    },
+    [speakText, stopLiveAudioPlayback]
+  );
+
+  const speakLiveResponse = useCallback(
+    async (text, audio) => {
+      if (audio?.data) {
+        setLiveVoiceStatus("Mode 2 is using Gemini Live native audio.");
+        await playAssistantAudio(audio, text);
+        return;
+      }
+
+      setLiveVoiceStatus(
+        "Mode 2 websocket is active, but Gemini returned text only. Browser voice fallback is in use."
+      );
+      await speakText(text);
+    },
+    [playAssistantAudio, speakText]
+  );
+
+  const endLiveSession = useCallback(
+    async (reason = "completed") => {
+      if (!liveSessionId) return;
+
+      const sessionIdToClose = liveSessionId;
+      setLiveSessionId(null);
+
+      try {
+        await fetch("/api/interview/live/end", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: sessionIdToClose, reason }),
+        });
+      } catch (error) {
+        console.error("Failed to close live session:", error);
+      }
+    },
+    [liveSessionId]
+  );
 
   const concludeInterview = useCallback(
     async (endedEarly = false) => {
@@ -212,6 +467,11 @@ function Agent({
 
       if (typeof window !== "undefined" && window.speechSynthesis) {
         window.speechSynthesis.cancel();
+      }
+      stopLiveAudioPlayback(false);
+
+      if (isLiveMode) {
+        await endLiveSession(endedEarly ? "ended-early" : "completed");
       }
 
       const closingMessage = endedEarly
@@ -223,34 +483,38 @@ function Agent({
       setCallStatus(CallStatus.FINISHED);
       await speakText(closingMessage);
     },
-    [appendMessage, speakText, stopRecognition]
+    [appendMessage, endLiveSession, isLiveMode, speakText, stopLiveAudioPlayback, stopRecognition]
   );
 
-  const getAcknowledgement = useCallback(async ({ question, answer, index, total }) => {
-    try {
-      const response = await fetch("/api/interview/acknowledge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role: roleInput || "General",
-          interviewType: typeInput,
-          question,
-          answer,
-          index,
-          total,
-        }),
-      });
+  const getAcknowledgement = useCallback(
+    async ({ question, answer, index, total }) => {
+      try {
+        const response = await fetch("/api/interview/acknowledge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            role: roleInput || "General",
+            interviewType: typeInput,
+            question,
+            answer,
+            index,
+            total,
+            experienceMode: activeMode,
+          }),
+        });
 
-      const data = await response.json();
-      if (data?.success && data?.acknowledgement) {
-        return String(data.acknowledgement).trim();
+        const data = await response.json();
+        if (data?.success && data?.acknowledgement) {
+          return String(data.acknowledgement).trim();
+        }
+      } catch (error) {
+        console.error("Acknowledgement request failed:", error);
       }
-    } catch (error) {
-      console.error("Acknowledgement request failed:", error);
-    }
 
-    return FALLBACK_ACKS[Math.floor(Math.random() * FALLBACK_ACKS.length)];
-  }, [roleInput, typeInput]);
+      return FALLBACK_ACKS[Math.floor(Math.random() * FALLBACK_ACKS.length)];
+    },
+    [activeMode, roleInput, typeInput]
+  );
 
   const askQuestion = useCallback(
     async (questionIndex, sourceQuestions) => {
@@ -281,47 +545,49 @@ function Agent({
     [appendMessage, concludeInterview, sessionQuestions, speakText, startRecognition]
   );
 
-  const handleGenerateFeedback = useCallback(async (transcriptMessages, interviewIdToUse) => {
-    if (!interviewIdToUse) {
-      toast.error("Missing interview id — cannot generate feedback.");
-      router.push("/");
-      return;
-    }
-
-    setIsGeneratingFeedback(true);
-    const loadingId = toast.loading("Generating feedback — this may take a few seconds...");
-
-    try {
-      const { success, feedbackId: id, message } = await createFeedback({
-        interviewId: interviewIdToUse,
-        userId: userId,
-        transcript: transcriptMessages,
-        feedbackId,
-      });
-
-      toast.dismiss(loadingId);
-
-      if (success && id) {
-        toast.success("Feedback ready");
-        router.push(`/interview/${interviewIdToUse}/feedback`);
-      } else {
-        console.error("Feedback creation failed:", message);
-        toast.error(message || "Failed to save feedback");
+  const handleGenerateFeedback = useCallback(
+    async (transcriptMessages, interviewIdToUse) => {
+      if (!interviewIdToUse) {
+        toast.error("Missing interview id - cannot generate feedback.");
         router.push("/");
+        return;
       }
-    } catch (err) {
-      toast.dismiss(loadingId);
-      console.error("Error creating feedback:", err);
-      toast.error("Error generating feedback — check server logs.");
-      router.push("/");
-    } finally {
-      setIsGeneratingFeedback(false);
-    }
-  }, [feedbackId, router, userId]);
+
+      setIsGeneratingFeedback(true);
+      const loadingId = toast.loading("Generating feedback - this may take a few seconds...");
+
+      try {
+        const { success, feedbackId: id, message } = await createFeedback({
+          interviewId: interviewIdToUse,
+          userId,
+          transcript: transcriptMessages,
+          feedbackId,
+        });
+
+        toast.dismiss(loadingId);
+
+        if (success && id) {
+          toast.success("Feedback ready");
+          router.push(`/interview/${interviewIdToUse}/feedback`);
+        } else {
+          console.error("Feedback creation failed:", message);
+          toast.error(message || "Failed to save feedback");
+          router.push("/");
+        }
+      } catch (err) {
+        toast.dismiss(loadingId);
+        console.error("Error creating feedback:", err);
+        toast.error("Error generating feedback - check server logs.");
+        router.push("/");
+      } finally {
+        setIsGeneratingFeedback(false);
+      }
+    },
+    [feedbackId, router, userId]
+  );
 
   useEffect(() => {
     if (messages.length === 0) return;
-
     setLastMessage(messages[messages.length - 1].content);
   }, [messages]);
 
@@ -338,6 +604,10 @@ function Agent({
     hasGeneratedFeedbackRef.current = false;
     stopRequestedRef.current = false;
 
+    if (liveSessionId) {
+      await endLiveSession("restart");
+    }
+
     setCallStatus(CallStatus.CONNECTING);
     setStage(InterviewStage.PREPARING);
     setIsPreparingInterview(true);
@@ -347,11 +617,106 @@ function Agent({
     setVoiceTranscript("");
     setManualAnswer("");
     setSessionQuestions([]);
+    setLiveSessionId(null);
+    setLiveExpectedQuestions(0);
+    setLiveCurrentPrompt("");
+    setLiveModelUsed("");
+    setLiveVoiceStatus("");
     setCreatedInterviewId(interviewId || null);
 
     try {
+      const modeForSession = isGenerateMode ? experienceMode : persistedInterviewMode;
+      const shouldUseLive = modeForSession === InterviewMode.LIVE_MODEL;
       let questionsToAsk = questions;
       let interviewIdFromServer = interviewId || null;
+
+      if (shouldUseLive) {
+        const metadata = interviewMetadata || {};
+        const expectedCount = isGenerateMode
+          ? Number(amountInput) || 5
+          : Number(metadata.amount || metadata.questionCount || questions?.length || 5);
+
+        if (isGenerateMode && (!roleInput || !typeInput || !levelInput || !techstackInput || !amountInput)) {
+          toast.info("Please fill all pre-call details before starting the call.");
+          setCallStatus(CallStatus.INACTIVE);
+          setStage(InterviewStage.IDLE);
+          return;
+        }
+
+        const livePayload = {
+          userid: userId,
+          interviewId: interviewIdFromServer,
+          role: isGenerateMode ? roleInput : metadata.role,
+          type: isGenerateMode ? typeInput : metadata.type,
+          level: isGenerateMode ? levelInput : metadata.level,
+          techstack: isGenerateMode ? techstackInput : metadata.techstack,
+          amount: expectedCount,
+        };
+
+        const liveRes = await fetch("/api/interview/live/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(livePayload),
+        });
+
+        const { data: liveData, message: liveStartErrorMessage } = await parseApiResponse(liveRes);
+        if (!liveRes.ok || !liveData?.success || !liveData?.sessionId) {
+          console.error("Live interview start failed:", {
+            status: liveRes.status,
+            statusText: liveRes.statusText,
+            payload: liveData,
+            message: liveStartErrorMessage,
+          });
+          toast.error(liveStartErrorMessage || "Failed to start Gemini Live interview mode.");
+          setCallStatus(CallStatus.INACTIVE);
+          setStage(InterviewStage.IDLE);
+          return;
+        }
+
+        interviewIdFromServer = liveData.interviewId || interviewIdFromServer;
+        if (interviewIdFromServer) {
+          setCreatedInterviewId(interviewIdFromServer);
+        }
+
+        setLiveSessionId(liveData.sessionId);
+        setLiveExpectedQuestions(Number(liveData.questionCount) || expectedCount);
+        setLiveModelUsed(String(liveData.modelUsed || ""));
+        setLiveVoiceStatus(
+          liveData.voiceMode === "native-audio"
+            ? "Mode 2 connected with Gemini Live native audio."
+            : "Mode 2 connected, but native audio was unavailable. Browser voice fallback is in use."
+        );
+
+        setCallStatus(CallStatus.ACTIVE);
+
+        const welcomeMessage = `Welcome ${userName || "there"}. Gemini Live mode is now active.`;
+        appendMessage("assistant", welcomeMessage);
+
+        if (stopRequestedRef.current) return;
+
+        const firstAssistantMessage = String(liveData.assistantMessage || "").trim();
+        if (firstAssistantMessage || liveData.assistantAudio?.data) {
+          appendMessage("assistant", firstAssistantMessage);
+          setLiveCurrentPrompt(firstAssistantMessage || "Gemini Live audio prompt received.");
+          setStage(InterviewStage.AI_SPEAKING);
+          await speakLiveResponse(
+            firstAssistantMessage || "Gemini Live prompt received.",
+            liveData.assistantAudio
+          );
+        } else {
+          setLiveCurrentPrompt("Live interviewer connected. Share your answer when ready.");
+        }
+
+        if (stopRequestedRef.current) return;
+
+        setStage(InterviewStage.LISTENING);
+        const started = startRecognition();
+        if (!started) {
+          toast.info("Voice input unavailable. Type your answer and submit.");
+        }
+
+        return;
+      }
 
       if (isGenerateMode) {
         if (!roleInput || !typeInput || !levelInput || !techstackInput || !amountInput) {
@@ -368,6 +733,7 @@ function Agent({
           techstack: techstackInput,
           amount: amountInput,
           userid: userId || "voice-user",
+          experienceMode: InterviewMode.GUIDED,
         };
 
         const res = await fetch("/api/interview/generate", {
@@ -395,7 +761,10 @@ function Agent({
         return;
       }
 
-      const normalizedQuestions = questionsToAsk.map((item) => String(item).trim()).filter(Boolean);
+      const normalizedQuestions = questionsToAsk
+        .map((item) => String(item).trim())
+        .filter(Boolean);
+
       if (!normalizedQuestions.length) {
         toast.error("Generated questions were invalid.");
         setCallStatus(CallStatus.INACTIVE);
@@ -409,7 +778,7 @@ function Agent({
       }
 
       setCallStatus(CallStatus.ACTIVE);
-      const welcomeMessage = `Welcome ${userName || "there"}. We will practice ${normalizedQuestions.length} interview questions.`;
+      const welcomeMessage = `Welcome ${userName || "there"}. Starting Guided Voice mode with ${normalizedQuestions.length} interview questions.`;
       appendMessage("assistant", welcomeMessage);
       setStage(InterviewStage.AI_SPEAKING);
       await speakText(welcomeMessage);
@@ -420,7 +789,7 @@ function Agent({
       console.error("Failed to start Gemini interview:", err);
       setCallStatus(CallStatus.INACTIVE);
       setStage(InterviewStage.IDLE);
-      toast.error(`Failed to start interview: ${err.message}`);
+      toast.error(`Failed to start interview: ${err?.message || "Unexpected error"}`);
     } finally {
       setIsPreparingInterview(false);
     }
@@ -431,18 +800,82 @@ function Agent({
 
     stopRecognition();
 
-    const answer = (manualAnswer.trim() || voiceTranscript.trim()).replace(/\s+/g, " ").trim();
+    const answer = (manualAnswer.trim() || voiceTranscript.trim())
+      .replace(/\s+/g, " ")
+      .trim();
+
     if (!answer) {
       toast.info("Record or type an answer before continuing.");
       return;
     }
 
-    const question = sessionQuestions[currentQuestionIndex];
     setStage(InterviewStage.PROCESSING);
     setManualAnswer("");
     setVoiceTranscript("");
     appendMessage("user", answer);
 
+    if (isLiveMode) {
+      if (!liveSessionId) {
+        toast.error("Live session was lost. Please restart the interview.");
+        await concludeInterview(true);
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/interview/live/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: liveSessionId, answer }),
+        });
+
+        const { data, message: liveTurnErrorMessage } = await parseApiResponse(response);
+        if (!response.ok || !data?.success) {
+          throw new Error(liveTurnErrorMessage || "Live interviewer did not return a response.");
+        }
+
+        const assistantMessage = String(data.assistantMessage || "").trim();
+        if (data.modelUsed) {
+          setLiveModelUsed(String(data.modelUsed));
+        }
+
+        setLiveVoiceStatus(
+          data.voiceMode === "native-audio"
+            ? "Mode 2 connected with Gemini Live native audio."
+            : "Mode 2 connected, but native audio was unavailable. Browser voice fallback is in use."
+        );
+
+        if (assistantMessage || data.assistantAudio?.data) {
+          appendMessage("assistant", assistantMessage);
+          setLiveCurrentPrompt(assistantMessage || "Gemini Live audio prompt received.");
+          setStage(InterviewStage.AI_SPEAKING);
+          await speakLiveResponse(
+            assistantMessage || "Gemini Live prompt received.",
+            data.assistantAudio
+          );
+        }
+
+        if (data.completed) {
+          await concludeInterview(false);
+          return;
+        }
+
+        if (stopRequestedRef.current) return;
+
+        setStage(InterviewStage.LISTENING);
+        const started = startRecognition();
+        if (!started) {
+          toast.info("Voice input unavailable. Type your answer and submit.");
+        }
+      } catch (error) {
+        console.error("Failed to process live turn:", error);
+        toast.error(error?.message || "Failed to process live turn.");
+        setStage(InterviewStage.LISTENING);
+      }
+
+      return;
+    }
+
+    const question = sessionQuestions[currentQuestionIndex];
     const acknowledgement = await getAcknowledgement({
       question,
       answer,
@@ -469,9 +902,13 @@ function Agent({
     concludeInterview,
     currentQuestionIndex,
     getAcknowledgement,
+    isLiveMode,
+    liveSessionId,
     manualAnswer,
     sessionQuestions,
+    speakLiveResponse,
     speakText,
+    startRecognition,
     stopRecognition,
     voiceTranscript,
   ]);
@@ -510,19 +947,36 @@ function Agent({
         : ". . .";
 
   const answeredCount = messages.filter((message) => message.role === "user").length;
-  const totalQuestions = sessionQuestions.length;
+  const totalQuestions = isLiveMode
+    ? Math.max(
+        1,
+        Number(liveExpectedQuestions) ||
+          Number(interviewMetadata?.amount || interviewMetadata?.questionCount) ||
+          Number(amountInput) ||
+          sessionQuestions.length ||
+          1
+      )
+    : sessionQuestions.length;
+
   const progressPercent = totalQuestions
     ? Math.min(100, Math.round((answeredCount / totalQuestions) * 100))
     : 0;
 
-  const activeQuestion = sessionQuestions[currentQuestionIndex] || "";
-  const canSubmitAnswer = callStatus === CallStatus.ACTIVE && stage !== InterviewStage.PROCESSING;
+  const displayQuestionNumber = isLiveMode
+    ? Math.min(answeredCount + 1, Math.max(totalQuestions, 1))
+    : Math.min(currentQuestionIndex + 1, Math.max(totalQuestions, 1));
+
+  const activeQuestion = isLiveMode
+    ? liveCurrentPrompt
+    : sessionQuestions[currentQuestionIndex] || "";
+
+  const canSubmitAnswer =
+    callStatus === CallStatus.ACTIVE && stage !== InterviewStage.PROCESSING;
   const canUseMic = canSubmitAnswer && supportsSpeechRecognition;
 
   return (
     <>
       <div className="call-view">
-        {/* AI Interviewer Card */}
         <div className="card-interviewer">
           <div className="avatar">
             <Image
@@ -536,7 +990,7 @@ function Agent({
           </div>
           <h3>AI Interviewer</h3>
         </div>
-         {/* User Profile Card */}
+
         <div className="card-border">
           <div className="card-content">
             <Image
@@ -568,22 +1022,62 @@ function Agent({
       )}
 
       <div className="w-full flex flex-col items-center gap-4">
-        {/* Pre-call form and question preview (only when not active) */}
         {isGenerateMode && callStatus !== CallStatus.ACTIVE && (
           <div className="form w-full max-w-xl p-4 border rounded-md bg-white/5">
             <h4 className="mb-2 font-semibold">Enter interview details</h4>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              {INTERVIEW_MODE_OPTIONS.map((option) => {
+                const isSelected = experienceMode === option.id;
+
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setExperienceMode(option.id)}
+                    disabled={isPreparingInterview}
+                    className={cn(
+                      "text-left rounded-xl border p-3 transition-colors",
+                      isSelected
+                        ? "border-primary-200 bg-primary-200/10"
+                        : "border-input bg-dark-200/40 hover:bg-dark-200/70"
+                    )}
+                    aria-pressed={isSelected}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-primary-100 font-semibold">{option.title}</p>
+                      {isSelected && (
+                        <span className="shrink-0 rounded-full bg-primary-200 px-2 py-0.5 text-xs font-bold text-dark-100">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-light-100 mt-1">{option.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <input
                 placeholder="Role (e.g., Frontend Developer)"
                 value={roleInput}
-                onChange={(e) => setRoleInput(e.target.value)}
+                onChange={(event) => setRoleInput(event.target.value)}
                 className="input"
               />
-              <select value={typeInput} onChange={(e) => setTypeInput(e.target.value)} className="input">
+              <select
+                value={typeInput}
+                onChange={(event) => setTypeInput(event.target.value)}
+                className="input"
+              >
                 <option>Technical</option>
                 <option>Behavioral</option>
               </select>
-              <select value={levelInput} onChange={(e) => setLevelInput(e.target.value)} className="input">
+              <select
+                value={levelInput}
+                onChange={(event) => setLevelInput(event.target.value)}
+                className="input"
+              >
                 <option>Junior</option>
                 <option>Mid</option>
                 <option>Senior</option>
@@ -591,19 +1085,23 @@ function Agent({
               <input
                 placeholder="Tech stack (comma-separated)"
                 value={techstackInput}
-                onChange={(e) => setTechstackInput(e.target.value)}
+                onChange={(event) => setTechstackInput(event.target.value)}
                 className="input"
               />
               <input
                 placeholder="Number of questions"
                 value={amountInput}
-                onChange={(e) => setAmountInput(e.target.value)}
+                onChange={(event) => setAmountInput(event.target.value)}
                 className="input"
               />
             </div>
 
             <div className="flex items-center gap-2 mt-3">
-              <p className="text-sm text-muted-foreground">When you start, Gemini generates personalized questions and begins a guided voice interview.</p>
+              <p className="text-sm text-muted-foreground">
+                {experienceMode === InterviewMode.LIVE_MODEL
+                  ? "Mode 2 uses Gemini Live websocket conduction. If native audio is unavailable, the screen will show the browser voice fallback."
+                  : "Mode 1 uses generated questions with stable guided voice flow."}
+              </p>
             </div>
           </div>
         )}
@@ -613,27 +1111,60 @@ function Agent({
             <div className="card p-4 flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3 max-sm:flex-col max-sm:items-start">
                 <p className="text-light-100 text-sm">
-                  Question {Math.min(currentQuestionIndex + 1, Math.max(totalQuestions, 1))} of {Math.max(totalQuestions, 1)}
+                  Question {displayQuestionNumber} of {Math.max(totalQuestions, 1)}
                 </p>
-                <p className="text-light-100 text-sm capitalize">Stage: {stage.toLowerCase().replace("_", " ")}</p>
+                <p className="text-light-100 text-sm capitalize">
+                  Stage: {stage.toLowerCase().replace("_", " ")}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-input bg-dark-200/40 p-3">
+                <p className="text-primary-100 text-sm font-semibold">
+                  Active mode: {isLiveMode ? "Mode 2 - Gemini Live Realtime" : "Mode 1 - Guided Voice"}
+                </p>
+                {isLiveMode && (
+                  <p className="text-light-100 text-sm mt-1">
+                    {liveVoiceStatus || "Checking Gemini Live voice path..."}
+                    {liveModelUsed ? ` Model: ${liveModelUsed}.` : ""}
+                  </p>
+                )}
               </div>
 
               <div className="w-full bg-dark-200 rounded-full h-2 overflow-hidden">
-                <div className="h-full bg-primary-200 transition-all" style={{ width: `${progressPercent}%` }} />
+                <div
+                  className="h-full bg-primary-200 transition-all"
+                  style={{ width: `${progressPercent}%` }}
+                />
               </div>
 
               <div className="rounded-xl border border-input bg-dark-200/40 p-4">
-                <p className="text-primary-100 font-semibold">Current Question</p>
-                <p className="text-light-100 mt-2">{activeQuestion || "Preparing your first question..."}</p>
+                <p className="text-primary-100 font-semibold">
+                  {isLiveMode ? "Current Interview Prompt" : "Current Question"}
+                </p>
+                <p className="text-light-100 mt-2">
+                  {activeQuestion ||
+                    (isLiveMode
+                      ? "Waiting for Gemini Live prompt..."
+                      : "Preparing your first question...")}
+                </p>
               </div>
 
               {supportsSpeechRecognition ? (
                 <div className="rounded-xl border border-input bg-dark-200/40 p-4">
                   <p className="text-primary-100 font-semibold">Voice Transcript</p>
-                  <p className={cn("mt-2 text-light-100 min-h-6", !voiceTranscript && "opacity-70")}>{voiceTranscript || "Start speaking or type your answer below."}</p>
+                  <p
+                    className={cn(
+                      "mt-2 text-light-100 min-h-6",
+                      !voiceTranscript && "opacity-70"
+                    )}
+                  >
+                    {voiceTranscript || "Start speaking or type your answer below."}
+                  </p>
                 </div>
               ) : (
-                <p className="text-sm text-light-100">Voice recognition is not supported in this browser. Type your answer below.</p>
+                <p className="text-sm text-light-100">
+                  Voice recognition is not supported in this browser. Type your answer below.
+                </p>
               )}
 
               <textarea
@@ -661,7 +1192,11 @@ function Agent({
                   onClick={() => void handleSubmitAnswer()}
                   disabled={!canSubmitAnswer}
                 >
-                  {stage === InterviewStage.PROCESSING ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                  {stage === InterviewStage.PROCESSING ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <Send size={16} />
+                  )}
                   Submit Answer
                 </button>
 
@@ -679,10 +1214,13 @@ function Agent({
           </div>
         )}
 
-        {/* Call buttons */}
         <div className="flex items-center">
           {callStatus !== CallStatus.ACTIVE ? (
-            <button className="relative btn-call" onClick={handleStartInterview} disabled={isCallButtonDisabled}>
+            <button
+              className="relative btn-call"
+              onClick={handleStartInterview}
+              disabled={isCallButtonDisabled}
+            >
               <span
                 className={cn(
                   "absolute animate-ping rounded-full opacity-75",
